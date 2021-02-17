@@ -3,7 +3,7 @@
 export HOME=/root
 export DA_ROOT="${DA_ROOT:-/usr/share/docassemble}"
 export DAPYTHONVERSION="${DAPYTHONVERSION:-3}"
-export DA_DEFAULT_LOCAL="local3.6"
+export DA_DEFAULT_LOCAL="local3.8"
 
 export DA_ACTIVATE="${DA_PYTHON:-${DA_ROOT}/${DA_DEFAULT_LOCAL}}/bin/activate"
 
@@ -43,21 +43,6 @@ export DEBIAN_FRONTEND=noninteractive
 if [ "${DAALLOWUPDATES:-true}" == "true" ]; then
     apt-get clean &> /dev/null
     apt-get -q -y update &> /dev/null
-    pandoc --help &> /dev/null || apt-get -q -y install pandoc
-fi
-
-LIBREOFFICE_VERSION=`libreoffice --version`
-if [[ $LIBREOFFICE_VERSION =~ ^LibreOffice\ 6.3 ]]; then
-    apt-get -q -y install -t buster-backports libreoffice
-fi
-
-PANDOC_VERSION=`pandoc --version | head -n1`
-
-if [ "${PANDOC_VERSION}" != "pandoc 2.7.3" ] && [ "${DAALLOWUPDATES:-true}" == "true" ]; then
-   cd /tmp \
-   && wget -q https://github.com/jgm/pandoc/releases/download/2.7.3/pandoc-2.7.3-1-amd64.deb \
-   && dpkg -i pandoc-2.7.3-1-amd64.deb \
-   && rm pandoc-2.7.3-1-amd64.deb
 fi
 
 echo "2" >&2
@@ -444,6 +429,10 @@ echo "16" >&2
 source /dev/stdin < <(su -c "source \"${DA_ACTIVATE}\" && python -m docassemble.base.read_config \"${DA_CONFIG_FILE}\"" www-data)
 export LOGDIRECTORY="${LOGDIRECTORY:-${DA_ROOT}/log}"
 
+echo "16.1" >&2
+
+python -m docassemble.webapp.starthook "${DA_CONFIG_FILE}"
+
 echo "16.5" >&2
 
 if [ "${DAWEBSERVER:-nginx}" = "nginx" ]; then
@@ -765,7 +754,7 @@ if [[ $CONTAINERROLE =~ .*:(all|sql):.* ]] && [ "$PGRUNNING" = false ] && [ "$DB
     fi
     dbexists=`su -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='${DBNAME:-docassemble}'\"" postgres`
     if [ -z "$dbexists" ]; then
-        echo "create database "${DBNAME:-docassemble}" owner "${DBUSER:-docassemble}";" | su -c psql postgres || exit 1
+        echo "create database "${DBNAME:-docassemble}" owner "${DBUSER:-docassemble}" encoding UTF8;" | su -c psql postgres || exit 1
     fi
 elif [ "$PGRUNNING" = false ] && [ "$DBTYPE" == "postgresql" ]; then
     export PGHOST="${DBHOST}"
@@ -783,6 +772,41 @@ elif [ "$PGRUNNING" = false ] && [ "$DBTYPE" == "postgresql" ]; then
     unset PGDATABASE
 fi
 
+echo "29.5" >&2
+
+if [ ! -f "${DA_ROOT}/certs/apache.key" ] && [ -f "${DA_ROOT}/certs/apache.key.orig" ]; then
+    mv "${DA_ROOT}/certs/apache.key.orig" "${DA_ROOT}/certs/apache.key"
+fi
+if [ ! -f "${DA_ROOT}/certs/apache.crt" ] && [ -f "${DA_ROOT}/certs/apache.crt.orig" ]; then
+    mv "${DA_ROOT}/certs/apache.crt.orig" "${DA_ROOT}/certs/apache.crt"
+fi
+if [ ! -f "${DA_ROOT}/certs/apache.ca.pem" ] && [ -f "${DA_ROOT}/certs/apache.ca.pem.orig" ]; then
+    mv "${DA_ROOT}/certs/apache.ca.pem.orig" "${DA_ROOT}/certs/apache.ca.pem"
+fi
+if [ ! -f "${DA_ROOT}/certs/nginx.key" ] && [ -f "${DA_ROOT}/certs/nginx.key.orig" ]; then
+    mv "${DA_ROOT}/certs/nginx.key.orig" "${DA_ROOT}/certs/nginx.key"
+fi
+if [ ! -f "${DA_ROOT}/certs/nginx.crt" ] && [ -f "${DA_ROOT}/certs/nginx.crt.orig" ]; then
+    mv "${DA_ROOT}/certs/nginx.crt.orig" "${DA_ROOT}/certs/nginx.crt"
+fi
+if [ ! -f "${DA_ROOT}/certs/nginx.ca.pem" ] && [ -f "${DA_ROOT}/certs/nginx.ca.pem.orig" ]; then
+    mv "${DA_ROOT}/certs/nginx.ca.pem.orig" "${DA_ROOT}/certs/nginx.ca.pem"
+fi
+if [ ! -f "${DA_ROOT}/certs/exim.key" ] && [ -f "${DA_ROOT}/certs/exim.key.orig" ]; then
+    mv "${DA_ROOT}/certs/exim.key.orig" "${DA_ROOT}/certs/exim.key"
+fi
+if [ ! -f "${DA_ROOT}/certs/exim.crt" ] && [ -f "${DA_ROOT}/certs/exim.crt.orig" ]; then
+    mv "${DA_ROOT}/certs/exim.crt.orig" "${DA_ROOT}/certs/exim.crt"
+fi
+if [ ! -f "${DA_ROOT}/certs/postgresql.key" ] && [ -f "${DA_ROOT}/certs/postgresql.key.orig" ]; then
+    mv "${DA_ROOT}/certs/postgresql.key.orig" "${DA_ROOT}/certs/postgresql.key"
+fi
+if [ ! -f "${DA_ROOT}/certs/postgresql.crt" ] && [ -f "${DA_ROOT}/certs/postgresql.crt.orig" ]; then
+    mv "${DA_ROOT}/certs/postgresql.crt.orig" "${DA_ROOT}/certs/postgresql.crt"
+fi
+
+python -m docassemble.webapp.install_certs "${DA_CONFIG_FILE}" || exit 1
+
 echo "30" >&2
 
 if [[ $CONTAINERROLE =~ .*:(all|cron):.* ]]; then
@@ -791,7 +815,7 @@ if [[ $CONTAINERROLE =~ .*:(all|cron):.* ]]; then
         source /configdata/initial_credentials
         rm -f /configdata/initial_credentials
     fi
-    su -c "source \"${DA_ACTIVATE}\" && python -m docassemble.webapp.fix_postgresql_tables \"${DA_CONFIG_FILE}\" && python -m docassemble.webapp.create_tables \"${DA_CONFIG_FILE}\"" www-data
+    su -c "source \"${DA_ACTIVATE}\" && python -m docassemble.webapp.create_tables \"${DA_CONFIG_FILE}\"" www-data
     unset DA_ADMIN_EMAIL
     unset DA_ADMIN_PASSWORD
 fi
@@ -824,10 +848,6 @@ if [ "$OTHERLOGSERVER" = false ] && [ -f "${LOGDIRECTORY}/docassemble.log" ]; th
     chown www-data.www-data "${LOGDIRECTORY}/docassemble.log"
 fi
 
-echo "35" >&2
-
-sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>/<policy domain="coder" rights="read | write" pattern="PDF" \/>/' /etc/ImageMagick-6/policy.xml
-
 echo "36" >&2
 
 if [[ $CONTAINERROLE =~ .*:(all|redis):.* ]] && [ "$REDISRUNNING" = false ]; then
@@ -838,13 +858,13 @@ echo "37" >&2
 
 if [ "${DAUPDATEONSTART:-true}" = "true" ] && [ "${DAALLOWUPDATES:-true}" == "true" ]; then
     echo "Doing upgrading of packages" >&2
-    su -c "source \"${DA_ACTIVATE}\" && pip install --upgrade pip==20.1 && python -m docassemble.webapp.update \"${DA_CONFIG_FILE}\" initialize" www-data || exit 1
+    su -c "source \"${DA_ACTIVATE}\" && python -m docassemble.webapp.update \"${DA_CONFIG_FILE}\" initialize" www-data || exit 1
     touch "${DA_ROOT}/webapp/initialized"
 fi
 
 if [ "${DAUPDATEONSTART:-true}" = "initial" ] && [ ! -f "${DA_ROOT}/webapp/initialized" ] && [ "${DAALLOWUPDATES:-true}" == "true" ]; then
     echo "Doing initial upgrading of packages" >&2
-    su -c "source \"${DA_ACTIVATE}\" && pip install --upgrade pip==20.1 && python -m docassemble.webapp.update \"${DA_CONFIG_FILE}\" initialize" www-data || exit 1
+    su -c "source \"${DA_ACTIVATE}\" && python -m docassemble.webapp.update \"${DA_CONFIG_FILE}\" initialize" www-data || exit 1
     touch "${DA_ROOT}/webapp/initialized"
 fi
 
@@ -880,37 +900,6 @@ echo "40" >&2
 if [[ $CONTAINERROLE =~ .*:(all|celery):.* ]] && [ "$CELERYRUNNING" = false ]; then
     supervisorctl --serverurl http://localhost:9001 start celery
 fi
-
-echo "41" >&2
-
-if [ ! -f "${DA_ROOT}/certs/apache.key" ] && [ -f "${DA_ROOT}/certs/apache.key.orig" ]; then
-    mv "${DA_ROOT}/certs/apache.key.orig" "${DA_ROOT}/certs/apache.key"
-fi
-if [ ! -f "${DA_ROOT}/certs/apache.crt" ] && [ -f "${DA_ROOT}/certs/apache.crt.orig" ]; then
-    mv "${DA_ROOT}/certs/apache.crt.orig" "${DA_ROOT}/certs/apache.crt"
-fi
-if [ ! -f "${DA_ROOT}/certs/apache.ca.pem" ] && [ -f "${DA_ROOT}/certs/apache.ca.pem.orig" ]; then
-    mv "${DA_ROOT}/certs/apache.ca.pem.orig" "${DA_ROOT}/certs/apache.ca.pem"
-fi
-if [ ! -f "${DA_ROOT}/certs/nginx.key" ] && [ -f "${DA_ROOT}/certs/nginx.key.orig" ]; then
-    mv "${DA_ROOT}/certs/nginx.key.orig" "${DA_ROOT}/certs/nginx.key"
-fi
-if [ ! -f "${DA_ROOT}/certs/nginx.crt" ] && [ -f "${DA_ROOT}/certs/nginx.crt.orig" ]; then
-    mv "${DA_ROOT}/certs/nginx.crt.orig" "${DA_ROOT}/certs/nginx.crt"
-fi
-if [ ! -f "${DA_ROOT}/certs/nginx.ca.pem" ] && [ -f "${DA_ROOT}/certs/nginx.ca.pem.orig" ]; then
-    mv "${DA_ROOT}/certs/nginx.ca.pem.orig" "${DA_ROOT}/certs/nginx.ca.pem"
-fi
-if [ ! -f "${DA_ROOT}/certs/exim.key" ] && [ -f "${DA_ROOT}/certs/exim.key.orig" ]; then
-    mv "${DA_ROOT}/certs/exim.key.orig" "${DA_ROOT}/certs/exim.key"
-fi
-if [ ! -f "${DA_ROOT}/certs/exim.crt" ] && [ -f "${DA_ROOT}/certs/exim.crt.orig" ]; then
-    mv "${DA_ROOT}/certs/exim.crt.orig" "${DA_ROOT}/certs/exim.crt"
-fi
-
-python -m docassemble.webapp.install_certs "${DA_CONFIG_FILE}" || exit 1
-
-echo "41.1" >&2
 
 if [ "${DAWEBSERVER:-nginx}" = "nginx" ]; then
     function backup_nginx {
@@ -983,14 +972,12 @@ if [ "${DAWEBSERVER:-nginx}" = "nginx" ]; then
             rm -f /etc/nginx/sites-enabled/docassemblehttp
             ln -sf /etc/nginx/sites-available/docassemblessl /etc/nginx/sites-enabled/docassemblessl
             if [ "${USELETSENCRYPT:-false}" == "true" ]; then
-                cd "${DA_ROOT}/letsencrypt"
                 export USE_PYTHON_3=1
                 if [ -f /etc/letsencrypt/da_using_lets_encrypt ]; then
-                    ./certbot-auto renew --nginx --cert-name "${DAHOSTNAME}"
+                    certbot renew --nginx --cert-name "${DAHOSTNAME}"
                 else
-                    ./certbot-auto --nginx --quiet --email "${LETSENCRYPTEMAIL}" --agree-tos --no-redirect -d "${DAHOSTNAME}" && touch /etc/letsencrypt/da_using_lets_encrypt
+                    certbot --nginx --quiet --email "${LETSENCRYPTEMAIL}" --agree-tos --no-redirect -d "${DAHOSTNAME}" && touch /etc/letsencrypt/da_using_lets_encrypt
                 fi
-                cd ~-
                 nginx -s stop &> /dev/null
                 touch /etc/letsencrypt/da_using_lets_encrypt
             else
@@ -1133,14 +1120,12 @@ if [ "${DAWEBSERVER:-nginx}" = "apache" ]; then
             a2enmod ssl
             a2ensite docassemble-ssl
             if [ "${USELETSENCRYPT:-false}" == "true" ]; then
-                cd "${DA_ROOT}/letsencrypt"
                 export USE_PYTHON_3=1
                 if [ -f /etc/letsencrypt/da_using_lets_encrypt ]; then
-                    ./certbot-auto renew --apache --cert-name "${DAHOSTNAME}"
+                    certbot renew --apache --cert-name "${DAHOSTNAME}"
                 else
-                    ./certbot-auto --apache --quiet --email "${LETSENCRYPTEMAIL}" --agree-tos --redirect -d "${DAHOSTNAME}" && touch /etc/letsencrypt/da_using_lets_encrypt
+                    certbot --apache --quiet --email "${LETSENCRYPTEMAIL}" --agree-tos --redirect -d "${DAHOSTNAME}" && touch /etc/letsencrypt/da_using_lets_encrypt
                 fi
-                cd ~-
                 /etc/init.d/apache2 stop
                 touch /etc/letsencrypt/da_using_lets_encrypt
             else

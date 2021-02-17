@@ -12,6 +12,7 @@ from twilio.rest import Client as TwilioRestClient
 import pycountry
 import docassemble.base.ocr
 import pickle
+from itertools import chain
 from docassemble.base.logger import logmessage
 from docassemble.base.error import DAError, DAValidationError, DAIndexError, DAWebError
 from jinja2.runtime import UndefinedError
@@ -300,7 +301,8 @@ __all__ = [
     'store_variables_snapshot',
     'stash_data',
     'retrieve_stashed_data',
-    'update_terms'
+    'update_terms',
+    'chain'
 ]
 
 #knn_machine_learner = DummyObject
@@ -1313,7 +1315,7 @@ class IndividualName(Name):
         and use_suffix."""
         if not self.uses_parts:
             return super().full()
-        names = [self.first]
+        names = [self.first.strip()]
         if hasattr(self, 'middle'):
             if middle is False or middle is None:
                 pass
@@ -1321,17 +1323,17 @@ class IndividualName(Name):
                 initial = self.middle_initial()
                 if initial:
                     names.append(initial)
-            elif len(self.middle):
-                names.append(self.middle)
-        if hasattr(self, 'last') and len(self.last):
-            names.append(self.last)
+            elif len(self.middle.strip()):
+                names.append(self.middle.strip())
+        if hasattr(self, 'last') and len(self.last.strip()):
+            names.append(self.last.strip())
         else:
-            if hasattr(self, 'paternal_surname'):
-                names.append(self.paternal_surname)
-            if hasattr(self, 'maternal_surname'):
-                names.append(self.maternal_surname)
-        if hasattr(self, 'suffix') and use_suffix and len(self.suffix):
-            names.append(self.suffix)
+            if hasattr(self, 'paternal_surname') and len(self.paternal_surname.strip()):
+                names.append(self.paternal_surname.strip())
+            if hasattr(self, 'maternal_surname') and len(self.maternal_surname.strip()):
+                names.append(self.maternal_surname.strip())
+        if hasattr(self, 'suffix') and use_suffix and len(self.suffix.strip()):
+            names.append(self.suffix.strip())
         return(" ".join(names))
     def firstlast(self):
         """Returns the first name followed by the last name."""
@@ -1344,11 +1346,13 @@ class IndividualName(Name):
         if not self.uses_parts:
             return super().lastfirst()
         output = self.last
-        if hasattr(self, 'suffix') and self.suffix:
+        if hasattr(self, 'suffix') and self.suffix and len(self.suffix.strip()):
             output += " " + self.suffix
         output += ", " + self.first
-        if hasattr(self, 'middle') and self.middle:
-            output += " " + self.middle[0] + '.'
+        if hasattr(self, 'middle'):
+            initial = self.middle_initial()
+            if initial:
+                output += " " + initial
         return output
     def middle_initial(self, with_period=True):
         """Returns the middle initial, or the empty string if the name does not have a middle component."""
@@ -2469,6 +2473,8 @@ def send_email(to=None, sender=None, reply_to=None, cc=None, bcc=None, body=None
             html = body_html
     if body is None and html is None:
         body = ""
+    if html is None:
+        html = '<html><body>' + body + '</body></html>'
     subject = re.sub(r'[\n\r]+', ' ', subject)
     sender_string = email_stringer(sender, first=True, include_name=True)
     reply_to_string = email_stringer(reply_to, first=True, include_name=True)
@@ -2617,8 +2623,10 @@ def ocr_file_in_background(*pargs, **kwargs):
     args = dict(yaml_filename=this_thread.current_info['yaml_filename'], user=this_thread.current_info['user'], user_code=this_thread.current_info['session'], secret=this_thread.current_info['secret'], url=this_thread.current_info['url'], url_root=this_thread.current_info['url_root'], language=language, psm=psm, x=x, y=y, W=W, H=H, extra=ui_notification, message=message, pdf=False, preserve_color=False)
     collector = server.ocr_finalize.s(**args)
     todo = list()
+    indexno = 0
     for item in docassemble.base.ocr.ocr_page_tasks(image_file, **args):
-        todo.append(server.ocr_page.s(**item))
+        todo.append(server.ocr_page.s(indexno, **item))
+        indexno += 1
     the_chord = server.chord(todo)(collector)
     if ui_notification is not None:
         worker_key = 'da:worker:uid:' + str(this_thread.current_info['session']) + ':i:' + str(this_thread.current_info['yaml_filename']) + ':userid:' + str(this_thread.current_info['user']['the_user_id'])
@@ -3066,7 +3074,7 @@ def url_ask(data):
             raise DAError("url_ask cannot be used with a generic object or a variable iterator")
     return url_action('_da_force_ask', variables=variables)
 
-def action_button_html(url, icon=None, color='success', size='sm', block=False, label='Edit', classname=None, new_window=True, id_tag=None):
+def action_button_html(url, icon=None, color='success', size='sm', block=False, label='Edit', classname=None, new_window=None, id_tag=None):
     """Returns HTML for a button that visits a particular URL."""
     if not isinstance(label, str):
         label = 'Edit'
@@ -3094,11 +3102,13 @@ def action_button_html(url, icon=None, color='success', size='sm', block=False, 
     else:
         icon = ''
     if new_window is True:
-        target = ''
+        target = 'target="_blank"'
     elif new_window is False:
         target = 'target="_self" '
-    else:
+    elif new_window:
         target = 'target="' + str(new_window) + '" '
+    else:
+        target = ''
     if id_tag is None:
         id_tag = ''
     else:
@@ -3182,7 +3192,7 @@ def prevent_dependency_satisfaction(f):
         #     raise Exception("Reference to undefined variable in context where dependency satisfaction not allowed") from err
     return wrapper
 
-def assemble_docx(input_file, fields=None, output_path=None, output_format='docx', return_content=False, pdf_options=None):
+def assemble_docx(input_file, fields=None, output_path=None, output_format='docx', return_content=False, pdf_options=None, filename=None):
     import docassemble.base.parse
     input_file = path_and_mimetype(input_file)[0]
     if not (isinstance(input_file, str) and os.path.isfile(input_file)):
@@ -3233,7 +3243,7 @@ def assemble_docx(input_file, fields=None, output_path=None, output_format='docx
         docx_template.save(temp_file.name)
         if not isinstance(pdf_options, dict):
             pdf_options = dict()
-        result = docassemble.base.pandoc.word_to_pdf(temp_file.name, 'docx', output_path, pdfa=pdf_options.get('pdfa', False), password=pdf_options.get('password', None), update_refs=pdf_options.get('update_refs', False), tagged=pdf_options.get('tagged', False))
+        result = docassemble.base.pandoc.word_to_pdf(temp_file.name, 'docx', output_path, pdfa=pdf_options.get('pdfa', False), password=pdf_options.get('password', None), update_refs=pdf_options.get('update_refs', False), tagged=pdf_options.get('tagged', False), filename=filename)
         if not result:
             raise DAError("Error converting to PDF")
     elif output_format == 'md':
